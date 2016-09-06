@@ -22,3 +22,21 @@ After installing, simply open an IPython notebook server
     ipython notebook
 	
 and choose a new "Stata" notebook.
+
+## Graphs
+  
+Use **%%graph** to insert the last graph created by Stata into the notebook.
+The graph is saved as a png file in a temporary directory, shown in the output.
+
+**Example**
+
+    sysuse auto, clear
+
+Then in a separate cell:
+
+    %%graph   
+    histogram price
+
+## Notes for PDF conversion
+
+See PDF.md.

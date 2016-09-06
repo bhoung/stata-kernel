@@ -10,7 +10,14 @@ try:
 except ImportError:
     from IPython.kernel.zmq.kernelbase import Kernel
 from IPython.core.magic import register_line_cell_magic
+from IPython.display import Image
+ 
+from time import strftime
+time_name = strftime("%Y_%m_%d_%H_%M_%S")
 
+import base64
+import sys
+import os
 
 class StataKernel(Kernel):
     implementation = 'StataKernel'
@@ -23,17 +30,23 @@ class StataKernel(Kernel):
         'mimetype': 'text/x-stata',
         'file_extension': 'do',
     }
-    
-    log_address = os.path.join(tempfile.gettempdir(), 'stata_kernel_log.txt')
-    
+
     def __init__(self, *args, **kwargs):
         super(StataKernel, self).__init__(*args, **kwargs)
+    
+        log_address = os.path.join(tempfile.gettempdir(), 'stata_' + time_name + '.txt')
+        python_cwd = os.getcwdu() if sys.version_info[0] == 2 else os.getcwd()
+        
         self.stata = win32com.client.Dispatch("stata.StataOLEApp")
         self.stata_do = self.stata.DoCommandAsync
-        self.stata_do('log using {} , text replace'.format(self.log_address))
+        self.stata_do('set linesize 80')
+        self.stata_do('log using {} , text replace'.format(log_address))
         self.stata_do('set more off')
+        self.stata_do('quietly cd "%s"' % python_cwd + '\n')
+        self.stata_do('display "Set the working directory of Stata to: %s"' % python_cwd)
+            
         time.sleep(0.5)
-        self.log_file = open(self.log_address)
+        self.log_file = open(log_address)
         self.continuation = False
         
         print('init complete')
@@ -84,16 +97,47 @@ class StataKernel(Kernel):
         self.continuation = False
         self.ignore_output()
         code = self.remove_continuations(code.strip())
-        mata_magic = re.match(r'\s*%%mata\s+', code)
-        if mata_magic:
-            code = 'mata\n' + code[mata_magic.end():] + '\nend\n'
-        try:
+        
+        graph_magic = re.match(r'\s*%%graph\s+', code)
+        
+        graph_filename = "jupyter_" + time_name + '.png'
+        graph_address = os.path.join(tempfile.gettempdir(), graph_filename)
+          
+        if graph_magic:
+            code = code[graph_magic.end():] + '\n' + 'quietly graph export "%s", replace width(400) height(300) ' % graph_address + "\n"
             self.stata_do('    ' + code + '\n')
             self.respond()
-        except KeyboardInterrupt:
-            self.stata.UtilSetStataBreak()
-            self.respond()
-            return {'status': 'abort', 'execution_count': self.execution_count}
+
+            metadata = {
+                'image/png' : {
+                    'width': 400,
+                    'height': 300
+                }
+            }
+              
+            with open(graph_address, "r+b") as imageFile:
+                base64_bytes = base64.b64encode(imageFile.read())
+                base64_string = base64_bytes.decode('utf-8')
+                dict = {}
+                dict['image/png']= base64_string
+                
+                content = {'data': dict, 'metadata': metadata}
+                self.send_response(self.iopub_socket, 'display_data', content)
+                
+        else:
+       
+            mata_magic = re.match(r'\s*%%mata\s+', code)
+            
+            if mata_magic:
+                code = 'mata\n' + code[mata_magic.end():] + '\nend\n'
+        
+            try:
+                self.stata_do('    ' + code + '\n')
+                self.respond()
+            except KeyboardInterrupt:
+                self.stata.UtilSetStataBreak()
+                self.respond()
+                return {'status': 'abort', 'execution_count': self.execution_count}
             
         msg = {
             'status': 'ok',
