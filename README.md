@@ -36,6 +36,7 @@ Then in a separate cell:
 
     %%graph   
     histogram price
+    scatter price mpg
 
 ## Notes for PDF conversion
 
