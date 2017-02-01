@@ -70,22 +70,27 @@ class StataKernel(Kernel):
         while get_log_line():
             pass
             
-    def respond(self):
-        lines = []
+    def respond(self, lines=50):
         UtilIsStataFree = self.stata.UtilIsStataFree
         log_file = self.log_file
         log_line = log_file.readline()
+        
         while not log_line:
             time.sleep(0.05)
             log_line = log_file.readline()
+            
+        i = 1    
         while log_line or not UtilIsStataFree():
             if log_line:
-                stream_content = {'name': 'stdout', 'text': log_line}
-                self.send_response(self.iopub_socket, 'stream', stream_content)
+            	if i <= lines:
+                    stream_content = {'name': 'stdout', 'text': log_line}
+                    self.send_response(self.iopub_socket, 'stream', stream_content)
+                    i = i + 1
             else:
                 time.sleep(0.05)
             log_line = log_file.readline()
-    
+            
+                 
     def do_execute(
         self,
         code,
@@ -97,33 +102,50 @@ class StataKernel(Kernel):
         self.continuation = False
         self.ignore_output()
         code = self.remove_continuations(code.strip())
-        
+
         graph_magic = re.match(r'\s*%%graph\s+', code)
         
-        graph_filename = "jupyter_" + time_name + '.png'
-        graph_address = os.path.join(tempfile.gettempdir(), graph_filename)
-          
         if graph_magic:
-            code = code[graph_magic.end():] + '\n' + 'quietly graph export "%s", replace width(400) height(300) ' % graph_address + "\n"
-            self.stata_do('    ' + code + '\n')
-            self.respond()
 
             metadata = {
-                'image/png' : {
+                'image/png' : {                                             
                     'width': 400,
                     'height': 300
                 }
             }
-              
-            with open(graph_address, "r+b") as imageFile:
-                base64_bytes = base64.b64encode(imageFile.read())
-                base64_string = base64_bytes.decode('utf-8')
-                dict = {}
-                dict['image/png']= base64_string
                 
-                content = {'data': dict, 'metadata': metadata}
+            code = code[graph_magic.end():]
+            lines = code.split('\n')
+          
+            i = 1
+            for line in lines:
+            	    
+            	graph_filename = "jupyter_" + time_name + '_' + str(i) + '.png'
+                graph_address = os.path.join(tempfile.gettempdir(), graph_filename)   
+            	    
+                self.stata_do('    ' + line + '\n')
+                self.stata_do('quietly graph export "%s", replace width(400) height(300) ' % graph_address + "\n")
+                self.stata_do('window manage close graph' + "\n")
+                
+                self.respond(2)
+                
+                UtilIsStataFree = self.stata.UtilIsStataFree
+  
+                while not UtilIsStataFree(): 
+                    time.sleep(0.05)         
+                                 
+            	with open(graph_address, "r+b") as imageFile:
+                    base64_bytes = base64.b64encode(imageFile.read())
+                    base64_string = base64_bytes.decode('utf-8')
+                    dict = {}
+                    dict['image/png']= base64_string
+                    
+                    content = {'data': dict, 'metadata': metadata}
+            	    
                 self.send_response(self.iopub_socket, 'display_data', content)
+                i = i + 1
                 
+            
         else:
        
             mata_magic = re.match(r'\s*%%mata\s+', code)
@@ -131,9 +153,19 @@ class StataKernel(Kernel):
             if mata_magic:
                 code = 'mata\n' + code[mata_magic.end():] + '\nend\n'
         
+            delimit = re.match(r'\s*\#delimit\;\s+', code)
+            
+            if delimit:
+            	code = code[delimit.end():] 
+            	code = code.replace('#delimit cr','')
+                code = ' '.join(code.split())
+            	code = code.replace('\n','')
+            	code = code.replace(';','\n')
+               
             try:
                 self.stata_do('    ' + code + '\n')
                 self.respond()
+                
             except KeyboardInterrupt:
                 self.stata.UtilSetStataBreak()
                 self.respond()
